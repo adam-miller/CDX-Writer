@@ -74,6 +74,8 @@ Note that `setup.py` does not specify full dependencies because this package
 depends on non-published version of `warctools`. Please install dependencies
 through `requirements.txt`.
 
+**Another option is to run `cdx_writer` using the provided `Dockerfile`.**
+
 ## Differences from archive-access cdx files
 
 The CDX files produced by the [archive-access](http://sourceforge.net/projects/archive-access/)
