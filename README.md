@@ -40,6 +40,9 @@ The supported format options are:
     m mime type of original document *
     r redirect *
     s response code *
+    Q language-codes
+    C simhash
+    T sha 256 checksum
 
     * in alexa-made dat file
     ** in alexa-made dat file meta-data line

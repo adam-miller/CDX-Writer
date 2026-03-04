@@ -50,6 +50,9 @@ class CDX_Writer(object):
                           'm': 'mime type',
                           'r': 'redirect',
                           's': 'response code',
+                          'Q': 'language-codes',
+                          'C': 'simhash',
+                          'T': 'sha 256 checksum',
                          }
 
         self.in_file = in_file

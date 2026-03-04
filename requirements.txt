@@ -1,2 +1,5 @@
 warctools>=4.10.0
 surt==0.3.1
+lxml[html_clean]
+pycld2
+simhash

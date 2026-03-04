@@ -4,10 +4,15 @@ import sys
 import io
 import base64
 import hashlib
-import urlparse
 from datetime import datetime
-from httplib import IncompleteRead
 import six
+from six.moves.urllib import parse as urlparse
+from six.moves.http_client import IncompleteRead
+import unicodedata
+import lxml.html
+from lxml_html_clean import Cleaner
+import pycld2 as cld2
+import simhash as simhash_lib
 
 from six.moves.urllib.parse import urljoin
 
@@ -608,6 +613,21 @@ class RecordHandler(object):
         """
         return self.env.warc_path
 
+    @property
+    def sha_256_checksum(self):
+        """sha 256 checksum / field "T"."""
+        return None
+
+    @property
+    def language_codes(self):
+        """language codes / field "Q"."""
+        return None
+
+    @property
+    def simhash(self):
+        """simhash / field "C"."""
+        return None
+
 class WarcinfoHandler(RecordHandler):
     """``wercinfo`` record handler."""
     #similar to what what the wayback uses:
@@ -690,7 +710,10 @@ class ResponseHandler(HttpHandler):
 
     def __init__(self, record, env):
         super(ResponseHandler, self).__init__(record, env)
-        self.meta_tags = self.parse_meta_tags()
+        self._compute_text_features = bool(
+            set(env.format.split()) & {'Q', 'C', 'T'}
+        )
+        self.meta_tags, self._parsed_text = self._parse_meta_tags_and_text()
 
     def is_response(self):
         return self.record.is_response()
@@ -719,8 +742,13 @@ class ResponseHandler(HttpHandler):
     def new_style_checksum(self):
         return self.content.content_digest()
 
-    def parse_meta_tags(self):
-        """We want to parse meta tags in <head>, even if not direct children.
+    def _parse_meta_tags_and_text(self):
+        """Returns (meta_tags, parsed_text) tuple.
+        parsed_text is UTF-8 encoded plain text, or None.
+        Reads content.content_reader once, shared for meta tags,
+        language detection, simhash, and sha256.
+
+        We want to parse meta tags in <head>, even if not direct children.
         e.g. <head><noscript><meta .../></noscript></head>
 
         What should we do about multiple meta tags with the same name?
@@ -741,16 +769,29 @@ class ResponseHandler(HttpHandler):
         # reading max 5MB into memory
         html_str = self.content.content_reader.read(5 * 1024 * 1024)
         if '' == html_str:
-            return meta_tags
+            return meta_tags, None
 
         #lxml can't handle large documents
         if self.record.content_length > self.env.lxml_parse_limit:
-            return meta_tags
+            return meta_tags, None
 
         # lxml was working great with ubuntu 10.04 / python 2.6
         # On ubuntu 11.10 / python 2.7, lxml exhausts memory hits the ulimit
         # on the same warc files. Unfortunately, we don't ship a virtualenv,
         # so we're going to give up on lxml and use regexes to parse html :(
+
+        # Still need lxml for full text:
+        parsed_text = None
+        if self._compute_text_features:
+            cleaner = Cleaner()
+            cleaner.javascript = True
+            cleaner.style = True
+            try:
+                root = lxml.html.fromstring(html_str)
+                root = cleaner.clean_html(root)
+                parsed_text = root.text_content().encode('utf-8')
+            except Exception:
+                pass
 
         for x in re.finditer("(<meta[^>]+?>|</head>)", html_str, re.I):
             #we only want to look for meta tags that occur before the </head> tag
@@ -778,7 +819,7 @@ class ResponseHandler(HttpHandler):
                     #for redirect urls, we only want the first refresh tag
                     meta_tags[name] += ',' + content
 
-        return meta_tags
+        return meta_tags, parsed_text
 
     @property
     def aif_meta_tags(self):
@@ -814,6 +855,65 @@ class ResponseHandler(HttpHandler):
                 pass
 
         return ''.join(s) if s else None
+
+    @property
+    def sha_256_checksum(self):
+        """sha 256 checksum / field "T"."""
+        if not self.is_response():
+            return None
+        text = self._parsed_text
+        if text is None:
+            return None
+        return hashlib.sha256(text).hexdigest()
+
+    @property
+    def language_codes(self):
+        """language codes / field "Q"."""
+        if self._parsed_text is None:
+            return None
+        term_threshold = 10
+        text_string_terms = self._parsed_text.split()
+        if len(text_string_terms) < term_threshold:
+            return None
+        text_string = ' '.join(text_string_terms)
+        lang_codes_with_pct = []
+        try:
+            is_reliable, _bytes_found, details = cld2.detect(text_string)
+            if is_reliable:
+                for (lang, lang_code, pct, score) in details:
+                    lang_code = lang_code.replace(' ', '')
+                    if lang_code != 'un':
+                        pct = int(pct)
+                        if pct > 0:
+                            lang_codes_with_pct.append('{}:{}'.format(lang_code, pct))
+        except Exception:
+            pass
+        return ','.join(lang_codes_with_pct) if lang_codes_with_pct else None
+
+    @property
+    def simhash(self):
+        """simhash / field "C"."""
+        text = self._parsed_text
+        if text is None:
+            return None
+        try:
+            text_string = text.decode('utf-8')
+        except UnicodeError:
+            return None
+        text_chars = []
+        for char in text_string:
+            if unicodedata.category(char).startswith('P'):
+                char = ' '
+            text_chars.append(char)
+        text_string = re.sub(r'\s+', ' ', ''.join(text_chars))
+        try:
+            tokens = re.split(r'\W+', text_string.lower(), flags=re.UNICODE)
+        except ValueError:
+            return None
+        shingle_length = 4
+        shingles = [''.join(s) for s in simhash_lib.shingle(''.join(tokens), shingle_length)]
+        hashes = [simhash_lib.unsigned_hash(s.encode('utf-8')) for s in shingles]
+        return str(simhash_lib.compute(hashes))
 
 class ResourceHandler(RecordHandler):
     """HTTP resource record (``resource`` record type).
