@@ -9,10 +9,15 @@ import six
 from six.moves.urllib import parse as urlparse
 from six.moves.http_client import IncompleteRead
 import unicodedata
-import lxml.html
-from lxml_html_clean import Cleaner
-import pycld2 as cld2
-import simhash as simhash_lib
+try:
+    import lxml.html
+    from lxml_html_clean import Cleaner
+    import pycld2 as cld2
+    import simhash as simhash_lib
+    import unicodedata
+    HAS_TEXT_FEATURES = True
+except ImportError:
+    HAS_TEXT_FEATURES = False
 
 from six.moves.urllib.parse import urljoin
 
@@ -710,7 +715,7 @@ class ResponseHandler(HttpHandler):
 
     def __init__(self, record, env):
         super(ResponseHandler, self).__init__(record, env)
-        self._compute_text_features = bool(
+        self._compute_text_features = HAS_TEXT_FEATURES and bool(
             set(env.format.split()) & {'Q', 'C', 'T'}
         )
         self.meta_tags, self._parsed_text = self._parse_meta_tags_and_text()

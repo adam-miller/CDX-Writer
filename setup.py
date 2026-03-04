@@ -16,6 +16,11 @@ setup(
             # requires a version locally patched for correct single-frame decompression
             'zstandard==0.12.0+ia1'
         ],
+        'textfeatures': [
+            "lxml[html_clean]",
+            "pycld2",
+            "simhash",
+        ],
         'test': [
             'pytest<5'
         ]

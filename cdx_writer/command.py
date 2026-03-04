@@ -13,8 +13,10 @@ from surt import surt
 from .dispatcher import DefaultDispatcher, AllDispatcher
 from .screenshot import ScreenshotDispatcher
 from .exclusion import PrefixExclusion
-from .handler import RecordHandler
+from .handler import RecordHandler, HAS_TEXT_FEATURES
 from .archive import ArchiveRecordReader
+
+TEXT_FEATURE_FIELDS = ['Q', 'C', 'T']
 
 class CDX_Writer(object):
     _mode_dispatcher = {
@@ -91,6 +93,11 @@ class CDX_Writer(object):
         for field in fieldcodes:
             if field not in self.field_map:
                 raise ParseError('unknown field; {}'.format(field))
+            if field in self.TEXT_FEATURE_FIELDS and not HAS_TEXT_FEATURES:
+                raise SystemExit(
+                    'error: field "{}" requires optional text feature dependencies. '
+                    'Install them with: pip install .[textfeatures]'.format(field)
+                )
             attrs.append(self.field_map[field].replace(' ', '_').lower())
         return attrgetter(*attrs)
 
@@ -290,6 +297,10 @@ def main(args=None):
                        )
 
     parser.add_option("--format",  dest="format", help="A space-separated list of fields [default: '%default']")
+    parser.add_option("--text-features", dest="text_features", action="store_true",
+                  default=False,
+                  help="Enable language detection, simhash, and SHA-256 checksum fields (Q, C, T). "
+                       "Requires optional textfeatures dependencies.")
     parser.add_option("--use-full-path", dest="use_full_path", action="store_true", help="Use the full path of the warc file in the 'g' field")
     parser.add_option("--file-prefix",   dest="file_prefix", help="Path prefix for warc file name in the 'g' field."
                       " Useful if you are going to relocate the warc.gz file after processing it."
@@ -331,6 +342,12 @@ def main(args=None):
             options.exclude_list, canonicalizer)
 
     error_handler = error_handler_type(options.ignore_error)
+
+    if options.text_features:
+        existing_fields = options.format.split()
+        for field in TEXT_FEATURE_FIELDS:
+            if field not in existing_fields:
+                options.format += ' ' + field
 
     cdx_writer = CDX_Writer(input_files[0], input_files[1],
                             format=options.format,
