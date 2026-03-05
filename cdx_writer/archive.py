@@ -12,9 +12,12 @@ hanzo.warctools shall be made after importing this module.
 """
 from __future__ import unicode_literals, print_function
 
+import io
 import sys
 import re
+import struct
 import hanzo
+import zlib
 from hanzo.warctools import ArchiveRecord
 from hanzo.warctools.stream import open_record_stream as _open_record_stream
 
@@ -131,75 +134,169 @@ class PatchedArcParser(ArcParser):
 
 hanzo.warctools.arc.ArcParser = PatchedArcParser
 
-# this only works for Python 2.7 and <=3.4
-class PatchedGeeZipFile(GeeZipFile):
-    def __init__(self, *args, **kwargs):
-        GeeZipFile.__init__(self, *args, **kwargs)
-        self.at_eom = None
-
-    def finish_member(self):
-        """Read off member to the end. self.raw_fh will be at the end
-        of member (just after the checksum bytes) after calling this
-        method.
-        Calling this method when at_eom==True is no-op.
-        """
-        if not self.at_eom or self.extrasize > 0:
-            while True:
-                d = self.read(1024)
-                if not d: break
-
-    def next_block(self):
-        # read off until the end of current member
-        # (at_eom==None is considered at_eom here, to allow calling
-        # next_block() before reading the first member)
-        if self.at_eom is not None:
-            self.finish_member()
+class GzipMemberFile(io.RawIOBase):
+    def __init__(self, raw_fh):
+        self.raw_fh = raw_fh
+        self.member_offset = raw_fh.tell()
         self.at_eom = False
-        # self.extrasize is supposed to be 0
-        try:
-            # start reading next member
-            self._read()
-            # self._new_member and self.at_eom are both supposed to be
-            # False here, *unless* member is smaller than one read.
-            return True
-        except EOFError:
-            return False
+        self._decomp = zlib.decompressobj(wbits=-zlib.MAX_WBITS)
+        self._buf = b''
+        self._crc = zlib.crc32(b'')
+        self._size = 0
+        self._skip_gzip_header()
 
-    def _read(self, size=1024):
-        # in EOM state, return EOF until it's reset.
+    def _read_raw(self, n):
+        return self.raw_fh.read(n)
+
+    def _skip_gzip_header(self):
+        header = self._read_raw(10)
+        if len(header) < 10 or header[:2] != b'\x1f\x8b':
+            raise IOError('Not a gzip file')
+        if header[2] != 8:
+            raise IOError('Unsupported compression method')
+        flg = header[3]
+        if flg & 0x04:  # FEXTRA
+            xlen = struct.unpack('<H', self._read_raw(2))[0]
+            self._read_raw(xlen)
+        if flg & 0x08:  # FNAME
+            while self._read_raw(1) not in (b'\x00', b''):
+                pass
+        if flg & 0x10:  # FCOMMENT
+            while self._read_raw(1) not in (b'\x00', b''):
+                pass
+        if flg & 0x02:  # FHCRC
+            self._read_raw(2)
+
+    def _fill_buf(self):
+        """Decompress more data into self._buf. Returns False at end of member."""
         if self.at_eom:
-            raise EOFError('Reached End-of-Member')
-        GeeZipFile._read(self, size)
-        if self._new_member:
+            return False
+        while not self._buf:
+            chunk = self._read_raw(4096)
+            if not chunk:
+                raise EOFError('Unexpected EOF in gzip member')
+            self._buf = self._decomp.decompress(chunk)
+            if self._decomp.unused_data or self._decomp.eof:
+                # end of deflate stream - unused_data is empty when stream ends
+                # exactly on a chunk boundary, so we check eof as well
+                unused = self._decomp.unused_data
+                if unused:
+                    self.raw_fh.seek(-len(unused), 1)
+                # raw_fh is now positioned at the gzip trailer
+                if not self._buf:
+                    self._read_trailer()
+                    self.at_eom = True
+                    return False
+                self._pending_eom = True
+                break
+        return bool(self._buf)
+
+    def _deliver(self, n=None):
+        """Take up to n bytes from self._buf, handle EOM if pending."""
+        if n is None:
+            data = self._buf
+            self._buf = b''
+        else:
+            data = self._buf[:n]
+            self._buf = self._buf[n:]
+        self._crc = zlib.crc32(data, self._crc)
+        self._size += len(data)
+        if not self._buf and getattr(self, '_pending_eom', False):
+            self._read_trailer()
             self.at_eom = True
+            self._pending_eom = False
+        return data
 
-    def _add_read_data(self, data):
-        GeeZipFile._add_read_data(self, data)
-        assert self.offset - self.extrastart + self.extrasize == len(self.extrabuf)
+    def _read_trailer(self):
+        trailer = self.raw_fh.read(8)
+        if len(trailer) < 8:
+            return
+        crc32, isize = struct.unpack('<II', trailer)
+        if crc32 != (self._crc & 0xffffffff):
+            raise IOError('CRC check failed 0x%08x != 0x%08x' % (
+                crc32, self._crc & 0xffffffff))
+        if isize != (self._size & 0xffffffff):
+            raise IOError('Incorrect length of data produced')
 
-    def close(self):
-        # debugging
-        import traceback
+    def readable(self):
+        return True
 
+    def read(self, n=-1):
+        if n == -1:
+            chunks = []
+            while self._fill_buf():
+                chunks.append(self._deliver())
+            return b''.join(chunks)
+        result = b''
+        while n > 0:
+            if not self._buf and not self._fill_buf():
+                break
+            result += self._deliver(n)
+            n -= len(result)
+        return result
 
-#__import__('hanzo').warctools.stream.GeeZipFile = PatchedGeeZipFile
+    def readinto(self, b):
+        data = self.read(len(b))
+        n = len(data)
+        b[:n] = data
+        return n
+
+    def readline(self, size=-1):
+        """Readline without BufferedReader - no read-ahead into raw_fh."""
+        chunks = []
+        while True:
+            if not self._buf and not self._fill_buf():
+                break
+            if size != -1:
+                chunk = self._buf[:size]
+            else:
+                chunk = self._buf
+            nl = chunk.find(b'\n')
+            if nl != -1:
+                line = self._deliver(nl + 1)
+                chunks.append(line)
+                break
+            chunks.append(self._deliver())
+            if size != -1:
+                size -= len(chunks[-1])
+                if size <= 0:
+                    break
+        return b''.join(chunks)
+
+    def finish(self):
+        """Drain remainder so raw_fh is at start of next member."""
+        if not self.at_eom:
+            while self._fill_buf():
+                self._deliver()
 
 class PatchedGzipRecordStream(GzipRecordStream):
     def __init__(self, file_handle, record_parser):
-        RecordStream.__init__(self, PatchedGeeZipFile(fileobj=file_handle),
-                              record_parser)
+        RecordStream.__init__(self, file_handle, record_parser)
         self.raw_fh = file_handle
+        self._member = None
+
+    def _finish_member_and_sync(self):
+        if self._member is None:
+            return
+        self._member.finish()
+        self._member = None
+        self.fh = None
+
+    def _open_member(self, raw_fh):
+        self._member = GzipMemberFile(raw_fh)
+        return self._member
+
+    @property
+    def member_offset(self):
+        return self._member.member_offset
 
     def _find_gzip_header(self):
-        # this could be a little bit more efficient.
+        # unchanged - operates on self.raw_fh directly
         f = self.raw_fh
         b = bytearray(f.read(4))
         while len(b) == 4:
             if b[0] == 0x1f and b[1] == 0x8b:
-                # compression method is deflate (8). Python gzip does not
-                # recognize anything other than 8.
                 if b[2] == 8:
-                    # and not encrypted
                     if (b[3] & 0x20) == 0:
                         f.seek(-4, 1)
                         return True
@@ -211,47 +308,26 @@ class PatchedGzipRecordStream(GzipRecordStream):
         return False
 
     def reset(self, start_offset=None):
-        """reset gzip reader to read compressed block afresh from the current
-        position.
-        """
-        # check if there's gzip header at current location. if not, read off
-        # until found.
         if start_offset is not None:
-            # seek back to the start of errored record + 1, to skip the
-            # GZIP header of the record.
-            # note start_offset may be at EOF. this will seek beyond EOF by 1.
             self.raw_fh.seek(start_offset + 1, 0)
         else:
-            # just in case - avoid infinite loop
             saved_offset = self.raw_fh.tell()
-            # if GzipFile.decompress has unused_data, we're resuming from
-            # CRC/length check failure. We shall not call finish_member, or
-            # GzipFile gets confused and moves file pointer to a wrong place.
-            # (currently CRC/length check failure case is not supposed to run
-            # this branch (supposed to run then branch above).
-            if self.fh.decompress.unused_data == b'':
-                try:
-                    self.fh.finish_member()
-                except Exception as ex:
-                    pass
+            try:
+                self._finish_member_and_sync()
+            except Exception:
+                pass
+            start_offset = self.raw_fh.tell()
+            if start_offset < saved_offset:
+                self.raw_fh.seek(saved_offset, 0)
                 start_offset = self.raw_fh.tell()
-                if start_offset < saved_offset:
-                    self.raw_fh.seek(saved_offset, 0)
-                    start_offset = self.raw_fh.tell()
         magic = self.raw_fh.read(2)
         if magic == b'':
-            # At EOF - this is not supposed to happen in known
-            # situations. If it ever happens (due to a bug),
-            # __next__() will fail again with "Not a gzip file" error
-            # and repeat that indefinitely, Setting zero to
-            # self._remaining forces __next__() to return immediately.
             self._remaining = 0
             return
         if magic == b'\x1f\x8b':
-            self.raw_fh.seek(-len(magic), 1)
+            self.raw_fh.seek(-2, 1)
         else:
             if len(magic) > 1:
-                # back up 1 byte
                 self.raw_fh.seek(-1, 1)
             if self._find_gzip_header():
                 found_offset = self.raw_fh.tell()
@@ -260,52 +336,28 @@ class PatchedGzipRecordStream(GzipRecordStream):
                         found_offset - 1), file=sys.stderr)
             else:
                 if self.raw_fh.tell() > start_offset:
-                    print('!!! skipped unusable data up to EOF',
-                          file=sys.stderr)
-        self.fh = PatchedGeeZipFile(fileobj=self.raw_fh)
+                    print('!!! skipped unusable data up to EOF', file=sys.stderr)
+        self.fh = self._open_member(self.raw_fh)
 
     def _finish_record(self):
-        self.fh.finish_member()
+        self._finish_member_and_sync()
 
     def _read_record(self, offsets):
-        # overridden to call next_block()
-        # if self.bytes_to_eoc is not None:
-        #     self._skip_to_eoc()
-        # self.bytes_to_eoc = None
-        # clear EOM state
-        self.fh.next_block()
-        self.bytes_to_eoc = None # not necessary, probably
+        self._finish_member_and_sync()
+        # check for EOF before attempting to open next member
+        if self.raw_fh.read(1) == b'':
+            return None, None, []
+        self.raw_fh.seek(-1, 1)
+        self.fh = self._open_member(self.raw_fh)
+        self.bytes_to_eoc = None
         record, errors, _offset = \
             self.record_parser.parse(self, offset=None, line=None)
-        offset = self.fh.member_offset
+        offset = self._member.member_offset
         return offset, record, errors
 
-    def read_records(self, limit=1, offsets=True):
-        # overridden to support empty gzip member
-        self._remaining = -1 if limit is None else limit
-        self._offsets = offsets
-        self._prev_offset = None
-        return self
+    def close(self):
+        self.raw_fh.close()
 
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        #nrecords = 0
-        #prev_offset = None
-        if self._remaining == 0:
-            raise StopIteration()
-        offset, record, errors = self._read_record(self._offsets)
-        if not record:
-            # for an empty gzip block record is None but offset advances.
-            if self._prev_offset is not None and self._prev_offset == offset:
-                raise StopIteration()
-        if self._remaining > 0:
-            self._remaining -= 1
-        self._prev_offset = offset
-        return offset, record, errors
-
-    next = __next__
 
 hanzo.warctools.stream.GzipRecordStream = PatchedGzipRecordStream
 
@@ -364,7 +416,7 @@ class ArchiveRecordEx(object):
         It is determined by ``Content-Type`` in WARC header, not ``WARC-Type``.
         """
         content_type = self.content_type
-        return content_type and self.RE_RESPONSE_CONTENT_TYPE.match(content_type)
+        return content_type and self.RE_RESPONSE_CONTENT_TYPE.match(content_type.decode('latin1'))
 
     # following methods makes ArchiveRecordEx compatible with ArchiveRecord
     @property

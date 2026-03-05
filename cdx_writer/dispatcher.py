@@ -14,7 +14,7 @@ class RecordDispatcher(object):
         if record_type in self._cache:
             disp = self._cache[record_type]
         else:
-            attr = "dispatch_{}".format(record_type)
+            attr = "dispatch_{}".format(record_type.decode('latin1'))
             disp = getattr(self, attr, None)
             if disp is None:
                 disp = getattr(self, "dispatch_any", None)
@@ -29,7 +29,7 @@ class RecordDispatcher(object):
 class DefaultDispatcher(RecordDispatcher):
     def dispatch_response(self, record, env):
         # probbaly it's better to test for "dns:" scheme?
-        if record.content_type in ('text/dns',):
+        if record.content_type in (b'text/dns',):
             return None
         if record.ip_address == b'127.0.0.1':
             return None
@@ -37,7 +37,7 @@ class DefaultDispatcher(RecordDispatcher):
         handler = ResponseHandler(record, env)
 
         # exclude 304 Not Modified responses - impossible to playback
-        if handler.response_code == '304':
+        if handler.response_code == b'304':
             return None
         # exclude ARC record for failed liveweb proxy - not a capture
         # they all have "0.0.0.0" as IP-address, but this alone is not safficient

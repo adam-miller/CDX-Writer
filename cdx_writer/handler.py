@@ -9,6 +9,8 @@ import six
 from six.moves.urllib import parse as urlparse
 from six.moves.http_client import IncompleteRead
 import unicodedata
+from http.client import HTTPMessage as _HTTPMessage
+import email.parser
 try:
     import lxml.html
     from lxml_html_clean import Cleaner
@@ -49,18 +51,24 @@ class RecordStreamReader(io.RawIOBase):
         return self.stream.readinto(b)
 
 class DigestingReader(io.RawIOBase):
-    def __init__(self, stream):
+    def __init__(self, stream, compute_sha256=False):
         """DigstingReader transparently reads from `stream`, computing
         digest hash as data go through it.
         `complete` flag is set when it sees EOF.
         """
         self.stream = stream
         self.digester = hashlib.sha1()
+        self.sha256_digester = hashlib.sha256() if compute_sha256 else None
         self.complete = False
 
     def b32digest(self):
         # returns bytes
         return base64.b32encode(self.digester.digest())
+
+    def sha256digest(self):
+        if self.sha256_digester is None:
+            raise RuntimeError('sha256 digest not in requested fields')
+        return self.sha256_digester.hexdigest()
 
     def readable(self):
         return True
@@ -69,6 +77,8 @@ class DigestingReader(io.RawIOBase):
         n = self.stream.readinto(b)
         if n > 0:
             self.digester.update(b[:n])
+            if self.sha256_digester is not None:
+                self.sha256_digester.update(b[:n])
         else:
             self.complete = True
         return n
@@ -102,86 +112,40 @@ HEADERS_IGNORED = set([
     'pragma'
 ])
 
-class HTTPMessage(HTTPMessageBase):
-    # Overridden to disable check on the number of header fields. There are
-    # too many cases of more than 30K header fields in real world. In order
-    # to reduce memory consumption, we discard those headers not interesting
-    # to archive record indexing.
-    def readheaders(self):
-        self.dict = {}
-        self.unixfrom = ''
-        self.headers = hlist = []
-        self.status = ''
-        headerseen = ""
-        firstline = 1
-        startofline = unread = tell = None
-        if hasattr(self.fp, 'unread'):
-            unread = self.fp.unread
-        elif self.seekable:
-            tell = self.fp.tell
-        while True:
-            if tell:
-                try:
-                    startofline = tell()
-                except IOError:
-                    startofline = tell = None
-                    self.seekable = 0
-            line = self.fp.readline()
-            if not line:
-                self.status = 'EOF in headers'
-                break
-            # Skip unix From name time lines
-            if firstline and line.startswith('From '):
-                self.unixfrom = self.unixfrom + line
+def _parse_headers_filtered(fp):
+    """Replacement for http.client.parse_headers that:
+    1. Has no header count limit (the stdlib caps at 100)
+    2. Discards headers in HEADERS_IGNORED to reduce memory use
+
+    There are too many cases of more than 30K header fields in real world. In order
+    to reduce memory consumption, we discard those headers not interesting
+    to archive record indexing.
+    """
+    headers = []
+    while True:
+        line = fp.readline(65537)
+        if len(line) > 65536:
+            raise LineTooLong("header line")
+        if line in (b'\r\n', b'\n', b''):
+            break
+        if not line:
+            break
+        # filter before accumulating
+        if b':' in line:
+            name = line.split(b':', 1)[0].strip().lower().decode('latin1')
+            if name in HEADERS_IGNORED:
                 continue
-            firstline = 0
-            if headerseen and line[0] in ' \t':
-                # XXX Not sure if continuation lines are handled properly
-                # for http and/or for repeating headers
-                # It's a continuation line.
-                if headerseen.lower() not in HEADERS_IGNORED:
-                    hlist.append(line)
-                    self.addcontinue(headerseen, line.strip())
-                continue
-            elif self.iscomment(line):
-                # It's a comment.  Ignore it.
-                continue
-            elif self.islast(line):
-                # Note! No pushback here!  The delimiter line gets eaten.
-                break
-            headerseen = self.isheader(line)
-            if headerseen:
-                # It's a legal header line, save it.
-                if headerseen.lower() not in HEADERS_IGNORED:
-                    hlist.append(line)
-                    self.addheader(headerseen, line[len(headerseen)+1:].strip())
-                continue
-            elif headerseen is not None:
-                # An empty header name. These aren't allowed in HTTP, but it's
-                # probably a benign mistake. Don't add the header, just keep
-                # going.
-                continue
-            else:
-                # It's not a header line; throw it back and stop here.
-                if not self.dict:
-                    self.status = 'No headers'
-                else:
-                    self.status = 'Non-header line where header expected'
-                # Try to undo the read.
-                if unread:
-                    unread(line)
-                elif tell:
-                    self.fp.seek(startofline)
-                else:
-                    self.status = self.status + '; bad seek'
-                break
+        headers.append(line)
+
+    hstring = b''.join(headers).decode('iso-8859-1')
+    return email.parser.Parser(_class=_HTTPMessage).parsestr(hstring)
 
 class HTTPResponseParser(HTTPResponseParserBase):
     def __init__(self, fileobj):
         if not hasattr(fileobj, 'peek'):
             fileobj = io.BufferedReader(fileobj)
         self.fileobj = fileobj
-        HTTPResponse.__init__(self, self, strict=0, buffering=False)
+        HTTPResponse.__init__(self, self)
         self.begin()
 
     def makefile(self, a, b=None):
@@ -231,13 +195,13 @@ class HTTPResponseParser(HTTPResponseParserBase):
         if self.version == 9:
             self.length = None
             self.chunked = 0
-            self.msg = HTTPMessage(io.BytesIO())
+            self.headers = self.msg = _parse_headers_filtered(io.BytesIO())
             return
 
-        self.msg = HTTPMessage(self.fp, 0)
+        self.headers = self.msg = _parse_headers_filtered(self.fp)
         self.msg.fp = None
 
-        tr_enc = self.msg.getheader('transfer-encoding')
+        tr_enc = self.msg.get('transfer-encoding')
         if tr_enc and tr_enc.lower() == 'chunked':
             self.chunked = 1
             self.chunk_left = None
@@ -246,7 +210,7 @@ class HTTPResponseParser(HTTPResponseParserBase):
 
         # it should not be critical to have length. we could
         # blanketly set length = None?
-        length = self.msg.getheader('content-length')
+        length = self.msg.get('content-length')
         if length and not self.chunked:
             try:
                 self.length = int(length)
@@ -301,7 +265,7 @@ class HTTPResponseParser(HTTPResponseParserBase):
     chunked = property(_get_chunked, _set_chunked)
 
 class RecordContent(object):
-    def __init__(self, stream):
+    def __init__(self, stream, compute_sha256=False):
         """Object for accessing archive record content ("block" or "payload).
         Provides content SHA1.
 
@@ -310,10 +274,11 @@ class RecordContent(object):
         """
         assert stream is not None
         self._block_reader = stream
+        self._compute_sha256 = compute_sha256
         self.content_reader = self._setup_content_reader()
 
     def _setup_content_reader(self):
-        return DigestingReader(self._block_reader)
+        return DigestingReader(self._block_reader, self._compute_sha256)
 
     def content_digest(self):
         if not self.content_reader.complete:
@@ -324,13 +289,22 @@ class RecordContent(object):
         assert self.content_reader.complete
         return self.content_reader.b32digest()
 
+    def content_digest_sha256(self):
+        if not self.content_reader.complete:
+            while True:
+                d = self.content_reader.read(4096)
+                if not d:
+                    break
+        assert self.content_reader.complete
+        return self.content_reader.sha256digest()
+
 class HttpResponseRecordContent(RecordContent):
     """:class:`RecordContent` for accessing HTTP response content.
     `content_reader` and `content_digest` works for HTTP response content, not record block.
     """
     def _setup_content_reader(self):
         self._http_response = HTTPResponseParser(self._block_reader)
-        return DigestingReader(self._http_response)
+        return DigestingReader(self._http_response, self._compute_sha256)
 
     def response_code(self):
         return self._http_response.status
@@ -455,7 +429,8 @@ class RecordHandler(object):
     def content(self):
         if self._content is None:
             reader = RecordStreamReader(self.record.content_file)
-            self._content = self._content_factory(reader)
+            compute_sha256 = 'T' in self.env.format.split()
+            self._content = self._content_factory(reader, compute_sha256)
         return self._content
 
     @property
@@ -490,22 +465,22 @@ class RecordHandler(object):
                 return record.date[:14]
             elif 12 == date_len:
                 #some arc records have 12-digit dates: 200011201434
-                return record.date + '00'
+                return record.date + b'00'
             elif 10 == date_len:
                 #some arc records have 10-digit dates: 2016020900
-                return record.date + '0000'
-        elif re.match('[a-f0-9]+$', record.date):
+                return record.date + 'b0000'
+        elif re.match(b'[a-f0-9]+$', record.date):
             #some arc records have a hex string in the date field
             return None
-        elif re.match('[0-9]{14,18}[a-zA-Z]+$', record.date):
+        elif re.match(b'[0-9]{14,18}[a-zA-Z]+$', record.date):
             #some arc records are like this: 20160211000000jpg
             return record.date[:14]
 
         #warc record
         try:
-            date = datetime.strptime(record.date[:19], "%Y-%m-%dT%H:%M:%S")
+            date = datetime.strptime(record.date[:19].decode('latin1'), "%Y-%m-%dT%H:%M:%S")
         except ValueError as ex:
-            raise FieldValueError('Archive-Date: {}'.format(record.date))
+            raise FieldValueError('Archive-Date: {}'.format(record.date.decode('latin1')))
         return date.strftime("%Y%m%d%H%M%S")
 
     def safe_url(self):
@@ -542,6 +517,8 @@ class RecordHandler(object):
     def _normalize_content_type(self, content_type):
         if content_type is None:
             return 'unk'
+        if isinstance(content_type, bytes):
+            content_type = content_type.decode('latin1')
 
         # if multiple header fields with the same name occur, HTTPResponse
         # joins values with comma, in reverse order of occurrence (this is prescribed by
@@ -568,7 +545,7 @@ class RecordHandler(object):
     def mime_type(self):
         """mime type / field "m".
         """
-        return 'warc/' + self.record.type
+        return 'warc/' + self.record.type.decode('latin1')
 
     @property
     def response_code(self):
@@ -763,21 +740,21 @@ class ResponseHandler(HttpHandler):
         """
 
         if self.mime_type != 'text/html':
-            return None
+            return None, None
 
         if self.content is None:
-            return None
+            return None, None
 
         meta_tags = {}
 
         #lxml.html can't parse blank documents
         # reading max 5MB into memory
         html_str = self.content.content_reader.read(5 * 1024 * 1024)
-        if '' == html_str:
+        if b'' == html_str:
             return meta_tags, None
 
         #lxml can't handle large documents
-        if self.record.content_length > self.env.lxml_parse_limit:
+        if self.record.content_length and self.record.content_length > self.env.lxml_parse_limit:
             return meta_tags, None
 
         # lxml was working great with ubuntu 10.04 / python 2.6
@@ -794,24 +771,26 @@ class ResponseHandler(HttpHandler):
             try:
                 root = lxml.html.fromstring(html_str)
                 root = cleaner.clean_html(root)
-                parsed_text = root.text_content().encode('utf-8')
+                text = root.text_content()
+                parsed_text = text.encode('utf-8') if text else None
             except Exception:
                 pass
 
-        for x in re.finditer("(<meta[^>]+?>|</head>)", html_str, re.I):
+        for x in re.finditer(b"(<meta[^>]+?>|</head>)", html_str, re.I):
             #we only want to look for meta tags that occur before the </head> tag
-            if x.group(1).lower() == '</head>':
+            if x.group(1).lower() == b'</head>':
                 break
             name = None
             content = None
 
-            m = re.search(r'''\b(?:name|http-equiv)\s*=\s*(['"]?)(.*?)(\1)[\s/>]''', x.group(1), re.I)
+            m = re.search(rb'''\b(?:name|http-equiv)\s*=\s*(['"]?)(.*?)(\1)[\s/>]''', x.group(1),
+                          re.I)
             if m:
                 name = m.group(2).lower()
             else:
                 continue
 
-            m = re.search(r'''\bcontent\s*=\s*(['"]?)(.*?)(\1)[\s/>]''', x.group(1), re.I)
+            m = re.search(rb'''\bcontent\s*=\s*(['"]?)(.*?)(\1)[\s/>]''', x.group(1), re.I)
             if m:
                 content = m.group(2)
             else:
@@ -820,9 +799,9 @@ class ResponseHandler(HttpHandler):
             if name not in meta_tags:
                 meta_tags[name] = content
             else:
-                if 'refresh' != name:
+                if b'refresh' != name:
                     #for redirect urls, we only want the first refresh tag
-                    meta_tags[name] += ',' + content
+                    meta_tags[name] += b',' + content
 
         return meta_tags, parsed_text
 
@@ -831,11 +810,16 @@ class ResponseHandler(HttpHandler):
         x_robots_tag = self.content.get_http_header('x-robots-tag')
 
         robot_tags = []
-        if self.meta_tags and 'robots' in self.meta_tags:
-            robot_tags += self.meta_tags['robots'].split(',')
+        if self.meta_tags and b'robots' in self.meta_tags:
+            robot_tags += self.meta_tags[b'robots'].split(b',')
         if x_robots_tag:
             robot_tags += x_robots_tag.split(',')
-        robot_tags = [x.strip().lower() for x in robot_tags]
+        # Normalize to str. get_http_header returns str in py3 and bytes in py2, and meta_tags
+        # dict keys and values are bytes in both py2 and py3.
+        robot_tags = [
+            (x.decode('latin1') if isinstance(x, bytes) else x).strip().lower()
+            for x in robot_tags
+        ]
 
         s = ''
         if 'noarchive' in robot_tags:
@@ -866,10 +850,8 @@ class ResponseHandler(HttpHandler):
         """sha 256 checksum / field "T"."""
         if not self.is_response():
             return None
-        text = self._parsed_text
-        if text is None:
-            return None
-        return hashlib.sha256(text).hexdigest()
+
+        return self.content.content_digest_sha256()
 
     @property
     def language_codes(self):
@@ -880,7 +862,7 @@ class ResponseHandler(HttpHandler):
         text_string_terms = self._parsed_text.split()
         if len(text_string_terms) < term_threshold:
             return None
-        text_string = ' '.join(text_string_terms)
+        text_string = b' '.join(text_string_terms)
         lang_codes_with_pct = []
         try:
             is_reliable, _bytes_found, details = cld2.detect(text_string)
@@ -898,11 +880,10 @@ class ResponseHandler(HttpHandler):
     @property
     def simhash(self):
         """simhash / field "C"."""
-        text = self._parsed_text
-        if text is None:
+        if self._parsed_text is None:
             return None
         try:
-            text_string = text.decode('utf-8')
+            text_string = self._parsed_text.decode('utf-8')
         except UnicodeError:
             return None
         text_chars = []
@@ -916,9 +897,17 @@ class ResponseHandler(HttpHandler):
         except ValueError:
             return None
         shingle_length = 4
-        shingles = [''.join(s) for s in simhash_lib.shingle(''.join(tokens), shingle_length)]
-        hashes = [simhash_lib.unsigned_hash(s.encode('utf-8')) for s in shingles]
-        return str(simhash_lib.compute(hashes))
+        joined = ''.join(tokens)
+        shingles = [joined[i:i + shingle_length]
+                    for i in range(max(1, len(joined) - shingle_length + 1))]
+        if not shingles:
+            return None
+        return str(simhash_lib.Simhash(shingles).value)
+        # shingles = [''.join(s) for s in simhash_lib.shingle(''.join(tokens), shingle_length)]
+        # hashes = [simhash_lib.unsigned_hash(s.encode('utf-8')) for s in shingles]
+        # return str(simhash_lib.compute(hashes))
+        # TODO: see if there is a way to keep the simhash generated backwards compatible with the
+        #  old version, which is based on shingles instead of simhash_lib.Simhash().
 
 class ResourceHandler(RecordHandler):
     """HTTP resource record (``resource`` record type).

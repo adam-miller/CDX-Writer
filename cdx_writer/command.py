@@ -52,7 +52,7 @@ class CDX_Writer(object):
                           'm': 'mime type',
                           'r': 'redirect',
                           's': 'response code',
-                          'Q': 'language-codes',
+                          'Q': 'language codes',
                           'C': 'simhash',
                           'T': 'sha 256 checksum',
                          }
@@ -93,7 +93,7 @@ class CDX_Writer(object):
         for field in fieldcodes:
             if field not in self.field_map:
                 raise ParseError('unknown field; {}'.format(field))
-            if field in self.TEXT_FEATURE_FIELDS and not HAS_TEXT_FEATURES:
+            if field in TEXT_FEATURE_FIELDS and not HAS_TEXT_FEATURES:
                 raise SystemExit(
                     'error: field "{}" requires optional text feature dependencies. '
                     'Install them with: pip install .[textfeatures]'.format(field)
@@ -127,7 +127,7 @@ class CDX_Writer(object):
                 raise
 
     def _make_cdx(self, out_file, stats):
-        out_file.write(b' CDX ' + self.format + b'\n') #print header
+        out_file.write(b' CDX ' + self.format.encode('latin1') + b'\n') #print header
 
         record_reader = ArchiveRecordReader(self.in_file)
         while True:
@@ -176,7 +176,9 @@ class CDX_Writer(object):
                 # self.headers, self.content = self.parse_headers_and_content(record)
                 # self.mime_type             = self.get_mime_type(record, use_precalculated_value=False)
 
-                values = [b'-' if v is None else v for v in self.fieldgetter(handler)]
+                values = [b'-' if v is None else v.encode() if isinstance(v, str) else v for v in
+                          self.fieldgetter(
+                        handler)]
                 out_file.write(b' '.join(values) + b'\n')
                 #record.dump()
                 stats['num_records_included'] += 1
