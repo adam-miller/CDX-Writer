@@ -460,8 +460,8 @@ class ArchiveRecordEx(object):
     def ip_address(self):
         # XXX ArcRecord and WarcRecord use different symbol for IP address
         # (IP and IP_ADDRESS, respectively). using literals here.
-        return (self.get_header('ip-address') or
-                self.get_header('warc-ip-address'))
+        return (self.get_header(b'ip-address') or
+                self.get_header(b'warc-ip-address'))
 
     def get_header(self, name):
         return self.wrapped_record.get_header(name)

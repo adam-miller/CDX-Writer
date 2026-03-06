@@ -17,6 +17,6 @@ class ScreenshotHandler(RecordHandler):
 class ScreenshotDispatcher(DefaultDispatcher):
     def dispatch_metadata(self, record, env):
         content_type = record.content_type
-        if content_type and content_type.startswith('image/'):
+        if content_type and content_type.startswith(b'image/'):
             return ScreenshotHandler
         return None

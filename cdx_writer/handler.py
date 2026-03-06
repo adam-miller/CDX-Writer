@@ -310,6 +310,8 @@ class HttpResponseRecordContent(RecordContent):
         return self._http_response.status
 
     def get_http_header(self, name):
+        """Header names and returned values are not byte-strings because they are processed
+        through http.client"""
         return self._http_response.getheader(name)
 
     def content_type(self):
@@ -468,7 +470,7 @@ class RecordHandler(object):
                 return record.date + b'00'
             elif 10 == date_len:
                 #some arc records have 10-digit dates: 2016020900
-                return record.date + 'b0000'
+                return record.date + b'0000'
         elif re.match(b'[a-f0-9]+$', record.date):
             #some arc records have a hex string in the date field
             return None
@@ -643,7 +645,10 @@ class HttpHandler(RecordHandler):
         location = self.content.get_http_header('location')
         if location:
             try:
-                location = urljoin(self.record.url, location)
+                url = self.record.url
+                if isinstance(url, bytes):
+                    url = url.decode('latin1')
+                location = urljoin(url, location)
                 key = self.urlkey(location)
             except Exception:
                 # ignore invalid URL
@@ -834,12 +839,12 @@ class ResponseHandler(HttpHandler):
         # of three values separated by comma. The first value is a number
         # of attempted logins (so >0 value means captured with login).
         # Example: ``1,1,http://(com,example,)/``
-        sfps = self.get_record_header('WARC-Simple-Form-Province-Status')
+        sfps = self.get_record_header(b'WARC-Simple-Form-Province-Status')
         if sfps:
-            sfps = sfps.split(',', 2)
+            sfps = sfps.split(b',', 2)
             try:
                 if int(sfps[0]) > 0:
-                    s += 'P'
+                    s += b'P'
             except ValueError as ex:
                 pass
 
@@ -924,10 +929,10 @@ class RevisitHandler(HttpHandler):
     """
     @property
     def new_style_checksum(self):
-        digest = self.get_record_header('WARC-Payload-Digest')
+        digest = self.get_record_header(b'WARC-Payload-Digest')
         if digest is None:
             return None
-        return digest.replace('sha1:', '')
+        return digest.replace(b'sha1:', b'')
 
 class FtpHandler(RecordHandler):
     @property
@@ -950,11 +955,11 @@ class FtpHandler(RecordHandler):
         # For "resource" record, block is also a payload. So
         # Both WARC-Payload-Digest and WARC-Block-Digest is valid.
         # wget uses Block. Heritirx uses Payload.
-        digest = self.get_record_header('WARC-Payload-Digest')
+        digest = self.get_record_header(b'WARC-Payload-Digest')
         if digest:
-            return digest.replace('sha1:', '')
-        digest = self.get_record_header('WARC-Block-Digest')
+            return digest.replace(b'sha1:', b'')
+        digest = self.get_record_header(b'WARC-Block-Digest')
         if digest:
-            return digest.replace('sha1:', '')
+            return digest.replace(b'sha1:', b'')
 
         return self.content.content_digest()
