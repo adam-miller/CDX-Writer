@@ -8,7 +8,6 @@ import sys
 import os
 import re
 import subprocess
-from pipes import quote
 from hashlib import md5
 
 data_dir = os.path.join(os.path.dirname(__file__), 'large_warcs')
