@@ -7,7 +7,6 @@ import py
 import sys
 import os
 import re
-import commands
 import subprocess
 from pipes import quote
 from hashlib import md5
@@ -62,12 +61,12 @@ def test_large_warcs(data, tmpdir):
 
     cmd = TIMECMD + '%s %s >%s' % (
         cdx_writer, warc_fn, tmpcdx)
-    print "  running", cmd
+    print ("  running", cmd)
     with py.path.local(warc_dir).as_cwd():
-        status, output = commands.getstatusoutput(cmd)
+        status, output = subprocess.getstatusoutput(cmd)
     assert 0 == status
-    print 'time: ', output
-    print 'size: ', os.path.getsize(warc_file)
+    print ('time: ', output)
+    print ('size: ', os.path.getsize(warc_file))
 
     # translate CDX output into expected data format
     tmphashcdx = tmpdir / 'tmp.hashcdx'
@@ -77,9 +76,9 @@ def test_large_warcs(data, tmpdir):
     exp = os.path.join(data_dir, re.sub(r'\.w?arc\.gz$', '.exp', warc_fn))
     if os.path.exists(exp):
         cmd = 'diff -u %r %r' % (exp, str(tmphashcdx))
-        print "  running", cmd
-        status, output = commands.getstatusoutput(cmd)
-        print output
+        print ("  running", cmd)
+        status, output = subprocess.getstatusoutput(cmd)
+        print (output)
         assert 0 == status
 
 def run_cdx_writer(warc_file, output, basedir=None):
@@ -144,7 +143,7 @@ if __name__ == "__main__":
                    " https://archive.org/download/%s" % (
                     args.cookie, warc_file, w['fn']))
             print >>sys.stderr, "Running %s" % (cmd,)
-            status, output = commands.getstatusoutput(cmd)
+            status, output = subprocess.getstatusoutput(cmd)
             assert status == 0, "Download failed with status=%d" % (status,)
 
             sys.stderr.write("Checking checksum...")
