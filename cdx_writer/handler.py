@@ -298,7 +298,17 @@ class HttpResponseRecordContent(RecordContent):
     `content_reader` and `content_digest` works for HTTP response content, not record block.
     """
     def _setup_content_reader(self):
-        self._http_response = HTTPResponseParser(self._block_reader)
+        # We set up two layers of DigestingReader here. The first layer (self._block_digester)
+        # computes digest for the whole block content. The second layer (self._http_response)
+        # computes digest for HTTP body (payload) only
+        self._block_digester = DigestingReader(self._block_reader, self._compute_sha256)
+        self._http_response = HTTPResponseParser(self._block_digester)
+        if self._http_response.version == 9:
+            # If we've fallen back to 0.9, it means we failed to parse the status line, and thus
+            # have already consumed content we needed to include in the digest
+            return self._block_digester
+        # Normal HTTP response: hash only the HTTP body (payload), not the
+        # status line / headers.
         return DigestingReader(self._http_response, self._compute_sha256)
 
     def response_code(self):

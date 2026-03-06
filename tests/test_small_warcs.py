@@ -386,14 +386,12 @@ def testdata(tmpdir):
 
 def get_cdx_writer_output(tmpdir, args):
     outpath = tmpdir / 'stdout'
-    saved_stdout = sys.stdout
-    sys.stdout = outpath.open(mode='wb')
     try:
-        status = cdx_writer.main(args)
+        with open(outpath,mode='wb') as outfile:
+            args.append(str(outpath))
+            status = cdx_writer.main(args)
     finally:
-        sys.stdout.close()
         output = outpath.read_binary()
-        sys.stdout = saved_stdout
     assert status == 0
     return output
 

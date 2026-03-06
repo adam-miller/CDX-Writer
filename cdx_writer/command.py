@@ -26,7 +26,7 @@ class CDX_Writer(object):
         'screenshot': ScreenshotDispatcher()
     }
 
-    def __init__(self, in_file, out_file=sys.stdout, format="N b a m s k r M S V g",
+    def __init__(self, in_file, out_file=sys.stdout.buffer, format="N b a m s k r M S V g",
                  warc_path=None, dispatch_mode=None,
                  exclude_list=None, canonicalizer=None,
                  error_handler=None):
@@ -325,7 +325,7 @@ def main(args=None):
 
     if len(input_files) != 2:
         if len(input_files) == 1:
-            input_files.append(sys.stdout)
+            input_files.append(sys.stdout.buffer)
         else:
             parser.print_help()
             return -1
