@@ -228,21 +228,16 @@ class HTTPResponseParser(HTTPResponseParserBase):
 
     # io.RawIOBase compatibility (necessary for handling calls from DigestingReader)
     def readinto(self, b):
-        # HTTPResponse does not implement readinto. implement
-        # with read()
-        size = len(b)
-        if size == 0:
-            return 0
-        # silently catches IncompleteRead due to truncated chunk encoding,
-        # and returns whatever available so far.
         try:
-            d = self.read(size)
+            # silently catches IncompleteRead due to truncated chunk encoding,
+            # and returns whatever available so far.
+            return HTTPResponse.readinto(self, b)
         except IncompleteRead as ex:
             d = ex.partial
-        if not d:
-            return 0
-        b[:len(d)] = d
-        return len(d)
+            if not d:
+                return 0
+            b[:len(d)] = d
+            return len(d)
 
     # chunked attribute is replaced with chunked property so that HTTPResponseParserr
     # can parse with "Transfer-Encoding:chunked" and non-chunked-encoded content.
@@ -644,11 +639,9 @@ class HttpHandler(RecordHandler):
         # key.
         location = self.content.get_http_header('location')
         if location:
+            location = location.encode('latin1')
             try:
-                url = self.record.url
-                if isinstance(url, bytes):
-                    url = url.decode('latin1')
-                location = urljoin(url, location)
+                location = urljoin(self.record.url, location)
                 key = self.urlkey(location)
             except Exception:
                 # ignore invalid URL
@@ -844,7 +837,7 @@ class ResponseHandler(HttpHandler):
             sfps = sfps.split(b',', 2)
             try:
                 if int(sfps[0]) > 0:
-                    s += b'P'
+                    s += 'P'
             except ValueError as ex:
                 pass
 

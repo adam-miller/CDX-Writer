@@ -73,7 +73,7 @@ def test_date_arc(tmpdir, date, expected):
             b"URL IP-address Archive-date Content-type Archive-length\n"
         ))
         write_arc_record(w, [
-            b'http://example.com/', b'1.2.3.4', date, 'text/plain'
+            b'http://example.com/', b'1.2.3.4', date, b'text/plain'
         ], http_response())
 
     timestamp = get_cdx_fields(arc)[1]
@@ -111,9 +111,9 @@ def test_date_warc(tmpdir, date, expected):
     (b'imag\xEF\xBF\xBDm)', b'unk'),
     # alexa_charset_in_header
     # INA-HISTORICAL-1996-GROUP-AAA-20100812000000-00000-c/INA-HISTORICAL-2000-GROUP-ACS-20100812000000-00001.arc.gz, fixed in warctools changeset 92:ca95fa09848b
-    (b'text/html; Charset=iso-8859-1', 'text/html'),
+    (b'text/html; Charset=iso-8859-1', b'text/html'),
     # aug-000823102923-c/aug-000823104637.arc.gz
-    (b'text/html; charset=koi8-r; charset=windows-1251', 'text/html')
+    (b'text/html; charset=koi8-r; charset=windows-1251', b'text/html')
 ])
 def test_contenttype_arc(tmpdir, contenttype, expected):
     arc = tmpdir / 'a.arc.gz'
@@ -152,7 +152,7 @@ def test_contenttype_warc(tmpdir, contenttype, expected):
             (b'WARC-Type', b'response'),
             (b'WARC-Target-URI', b'http://example.com/'),
             (b'WARC-Date', date),
-            (b'Content-Type', contenttype.encode('utf-8'))
+            (b'Content-Type', contenttype)
         ], http_response())
 
     mimetype = get_cdx_fields(warc)[3]

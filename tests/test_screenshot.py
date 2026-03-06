@@ -68,7 +68,7 @@ def test_sceenshot_regular(block_digest, tmpdir):
     """
     # fake screenshot data
     payload = b'\x01' * 128
-    payload_digest = base64.b32encode(hashlib.sha1(payload).digest())
+    payload_digest = base64.b32encode(hashlib.sha1(payload).digest()).decode('ascii')
 
     recbits = create_metadata_record_bytes(content=payload, include_block_digest=block_digest)
     warc = tmpdir / 'test.warc.gz'

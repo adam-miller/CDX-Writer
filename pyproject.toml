@@ -4,7 +4,7 @@ requires = ["setuptools"]
 [project]
 name = "CDX-Writer"
 version = "0.4.5"
-requires-python = ">=3.11"
+requires-python = "<3.10,>3.8"
 dependencies = [
     "warctools>=4.10.0",
     "surt==0.3.1",
@@ -12,12 +12,12 @@ dependencies = [
 
 [project.optional-dependencies]
 textfeatures = [
-    "lxml[html_clean]",
-    "pycld2",
-    "simhash",
+    "lxml[html_clean]==6.0.2",
+    "pycld2==0.42",
+    "simhash==2.1.2",
 ]
 test = [
-    "pytest<5",
+    "pytest<6",
 ]
 
 [project.scripts]

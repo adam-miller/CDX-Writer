@@ -25,7 +25,7 @@ b"com,monsterindia,jobs)/details/9660976.html 20110804181044 http://jobs.monster
     {
         'file': 'uncompressed.arc',
         'exclude': 'http://art.rolo.vn/a/',
-        'result' : """ CDX N b a m s k r M S V g
+        'result' : b""" CDX N b a m s k r M S V g
 filedesc://51_23_20110804181044_crawl101.arc.gz 20110804181044 filedesc://51_23_20110804181044_crawl101.arc.gz warc/filedesc - 3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ - - 161 0 uncompressed.arc
 de,sueddeutsche)/muenchen/manu-chao-in-muenchen-che-guitarra-1.1114509-2 20110804181044 http://www.sueddeutsche.de:80/muenchen/manu-chao-in-muenchen-che-guitarra-1.1114509-2 text/html 200 ZMBIXCVTXG2CNEFAZI753FJUXJUQSI2M - A 78939 392 uncompressed.arc
 com,monsterindia,jobs)/details/9660976.html 20110804181044 http://jobs.monsterindia.com:80/details/9660976.html text/html 200 BQJDX42R5GFX4OIXPGNHZG3QFM5X3KQR - - 51406 79332 uncompressed.arc
@@ -35,7 +35,7 @@ com,monsterindia,jobs)/details/9660976.html 20110804181044 http://jobs.monsterin
     {
         'file': 'uncompressed.arc',
         'exclude': 'http://www.sueddeutsche.de\n\nhttp://art.rolo.vn/a/', #contains repeated newline
-        'result' : """ CDX N b a m s k r M S V g
+        'result' : b""" CDX N b a m s k r M S V g
 filedesc://51_23_20110804181044_crawl101.arc.gz 20110804181044 filedesc://51_23_20110804181044_crawl101.arc.gz warc/filedesc - 3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ - - 161 0 uncompressed.arc
 com,monsterindia,jobs)/details/9660976.html 20110804181044 http://jobs.monsterindia.com:80/details/9660976.html text/html 200 BQJDX42R5GFX4OIXPGNHZG3QFM5X3KQR - - 51406 79332 uncompressed.arc
 """,

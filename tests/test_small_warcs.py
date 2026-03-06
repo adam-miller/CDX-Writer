@@ -399,7 +399,7 @@ def get_cdx_writer_output(tmpdir, args):
 
 CDX_HEADER = b' CDX N b a m s k r M S V g'
 
-@pytest.mark.parametrize(["file", "expected"], warcs_all_records.iteritems())
+@pytest.mark.parametrize(["file", "expected"], warcs_all_records.items())
 def test_all_records(file, expected, tmpdir, testdata):
     archive = testdata(file)
     args = ['--all-records', archive.basename]
@@ -408,7 +408,7 @@ def test_all_records(file, expected, tmpdir, testdata):
     assert output[0] == CDX_HEADER
     assert output[1:] == expected
 
-@pytest.mark.parametrize(["file", "expected"], warcs_defaults.iteritems())
+@pytest.mark.parametrize(["file", "expected"], warcs_defaults.items())
 def test_defaults(file, expected, tmpdir, testdata):
     '''Test `cdx_writer.py WARC`.'''
     archive = testdata(file)

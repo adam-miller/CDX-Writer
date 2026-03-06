@@ -14,7 +14,7 @@ class PrefixExclusion(object):
                 if '' == line.strip():
                     continue
                 url = line.split()[0]
-                self.excludes.append(self.urlkey(url))
+                self.excludes.append(self.urlkey(url.encode('latin1')))
 
     def excluded(self, urlkey):
         # XXX linear search - could be a little more efficient
