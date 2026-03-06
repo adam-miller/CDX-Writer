@@ -343,17 +343,21 @@ class PatchedGzipRecordStream(GzipRecordStream):
         self._finish_member_and_sync()
 
     def _read_record(self, offsets):
-        self._finish_member_and_sync()
-        # check for EOF before attempting to open next member
-        if self.raw_fh.read(1) == b'':
-            return None, None, []
-        self.raw_fh.seek(-1, 1)
-        self.fh = self._open_member(self.raw_fh)
-        self.bytes_to_eoc = None
-        record, errors, _offset = \
-            self.record_parser.parse(self, offset=None, line=None)
-        offset = self._member.member_offset
-        return offset, record, errors
+        while True:
+            self._finish_member_and_sync()
+            # check for EOF before attempting to open next member
+            if self.raw_fh.read(1) == b'':
+                return None, None, []
+            self.raw_fh.seek(-1, 1)
+            self.fh = self._open_member(self.raw_fh)
+            self.bytes_to_eoc = None
+            record, errors, _offset = \
+                self.record_parser.parse(self, offset=None, line=None)
+            offset = self._member.member_offset
+            if record is not None or errors:
+                return offset, record, errors
+            # empty gzip member produced no record and no errors - skip it
+            # and try the next member rather than signalling EOF to the caller.
 
     def close(self):
         self.raw_fh.close()
@@ -381,7 +385,7 @@ from hanzo.warctools.archive_detect import register_record_type
 # some ARC files are missing the filedesc record at the beginning
 register_record_type(
     # pattern for ARC v1 header
-    re.compile('^https?://\S+ (?:\d{1,3}\.){3}\d{1,3} \d{14} \S* \d+$'),
+    re.compile(br'^https?://\S+ (?:\d{1,3}\.){3}\d{1,3} \d{14} \S* \d+$'),
     ArcRecord
 )
 
