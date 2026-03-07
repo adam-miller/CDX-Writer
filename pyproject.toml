@@ -14,8 +14,7 @@ dependencies = [
 textfeatures = [
     "lxml[html_clean]==6.0.2",
     "pycld2==0.42",
-    "simhash==2.1.2",
-    "numpy >1.24.4" # fix for simhash 2.1.2
+    "simhash-pybind==0.0.3",
 ]
 test = [
     "pytest==9.0.2",

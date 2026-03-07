@@ -15,7 +15,7 @@ try:
     import lxml.html
     from lxml_html_clean import Cleaner
     import pycld2 as cld2
-    import simhash as simhash_lib
+    from simhash import shingle, unsigned_hash, compute
     import unicodedata
     HAS_TEXT_FEATURES = True
 except ImportError:
@@ -394,8 +394,8 @@ def urljoin_and_normalize(base, url, charset):
         path   = joined_url[m.end(1):]
         if path.startswith('../'):
             path = path[3:]
-        norm_url = domain + re.sub('/[^/]+/\.\./', '/', path)
-        norm_url = re.sub('/\./', '/', norm_url)
+        norm_url = domain + re.sub(r'/[^/]+/\.\./', '/', path)
+        norm_url = re.sub(r'/\./', '/', norm_url)
     else:
         norm_url = joined_url
 
@@ -896,9 +896,11 @@ class ResponseHandler(HttpHandler):
             return None
         text_chars = []
         for char in text_string:
+            # Replace punctuation with a space.
             if unicodedata.category(char).startswith('P'):
                 char = ' '
             text_chars.append(char)
+        # normalize whitespace to a single space
         text_string = re.sub(r'\s+', ' ', ''.join(text_chars))
         try:
             tokens = re.split(r'\W+', text_string.lower(), flags=re.UNICODE)
@@ -906,16 +908,11 @@ class ResponseHandler(HttpHandler):
             return None
         shingle_length = 4
         joined = ''.join(tokens)
-        shingles = [joined[i:i + shingle_length]
-                    for i in range(max(1, len(joined) - shingle_length + 1))]
+        # array of 4 character shingles.
+        shingles = [''.join(s) for s in shingle(joined, 4)]
         if not shingles:
             return None
-        return str(simhash_lib.Simhash(shingles).value)
-        # shingles = [''.join(s) for s in simhash_lib.shingle(''.join(tokens), shingle_length)]
-        # hashes = [simhash_lib.unsigned_hash(s.encode('utf-8')) for s in shingles]
-        # return str(simhash_lib.compute(hashes))
-        # TODO: see if there is a way to keep the simhash generated backwards compatible with the
-        #  old version, which is based on shingles instead of simhash_lib.Simhash().
+        return str(compute([unsigned_hash(s.encode()) for s in shingles]))
 
 class ResourceHandler(RecordHandler):
     """HTTP resource record (``resource`` record type).
