@@ -15,7 +15,7 @@ import py
 
 def write_arc_record(w, fields, content):
     assert isinstance(content, bytes)
-    with GzipFile(fileobj=w) as z:
+    with GzipFile(fileobj=w, mode="wb") as z:
         z.write(b' '.join(fields) + b' ' + 
                 format(len(content)).encode('ascii') + b'\n')
         z.write(content)
@@ -23,7 +23,7 @@ def write_arc_record(w, fields, content):
 
 def write_warc_record(w, headers, content):
     assert isinstance(content, bytes)
-    with GzipFile(fileobj=w) as z:
+    with GzipFile(fileobj=w, mode="wb") as z:
         z.write(b'WARC/1.0\r\n')
         for n, v in headers:
             z.write(n + b': ' + v + b'\r\n')
